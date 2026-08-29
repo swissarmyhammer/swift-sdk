@@ -180,11 +180,26 @@ public actor HTTPClientTransport: Transport {
         }
     }
 
+    // Resume and clear the pending initial session ID continuation
+    private func releaseInitialSessionIDSignal() {
+        initialSessionIDContinuation?.resume()
+        initialSessionIDContinuation = nil
+    }
+
+    // Release the signal when the timeout expires before a session ID arrives,
+    // so the streaming task can continue without a session ID
+    private func handleInitialSessionIDTimeout() {
+        guard initialSessionIDContinuation != nil else { return }
+        logger.warning(
+            "⏱️ Timeout waiting for session ID (\(sseInitializationTimeout)s). SSE stream will proceed anyway."
+        )
+        releaseInitialSessionIDSignal()
+    }
+
     // Trigger the initial session ID signal when a session ID is established
     private func triggerInitialSessionIDSignal() {
-        if let continuation = self.initialSessionIDContinuation {
-            continuation.resume()
-            self.initialSessionIDContinuation = nil
+        if self.initialSessionIDContinuation != nil {
+            releaseInitialSessionIDSignal()
             logger.debug("✓ Initial session ID signal triggered for SSE task")
         } else {
             logger.debug("✗ No continuation to trigger - signal already consumed or SSE task not waiting")
@@ -218,8 +233,7 @@ public actor HTTPClientTransport: Transport {
 
         initialSessionIDSignalTask?.cancel()
         initialSessionIDSignalTask = nil
-        initialSessionIDContinuation?.resume()
-        initialSessionIDContinuation = nil
+        releaseInitialSessionIDSignal()
 
         logger.debug("HTTP clienttransport disconnected")
     }
@@ -493,22 +507,26 @@ public actor HTTPClientTransport: Transport {
                 let startTime = Date()
                 let timeout = self.sseInitializationTimeout
                 do {
-                    try await withThrowingTaskGroup { group in
+                    try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
                             try await Task.sleep(for: .seconds(timeout))
+                            // The timeout expired before a session ID arrived.
+                            // Release the signal so `signalTask` completes and
+                            // the group can return. `await task.value` does not
+                            // react to cancellation, so `cancelAll()` alone
+                            // cannot release the group.
+                            await self.handleInitialSessionIDTimeout()
                         }
 
                         group.addTask {
                             await signalTask.value
                         }
 
-                        if let firstResult = try await group.next() {
-                            group.cancelAll()
-                            return firstResult
-                        }
+                        try await group.next()
+                        group.cancelAll()
                     }
                 } catch {
-                    logger.warning("⏱️ Timeout waiting for session ID (\(timeout)s). SSE stream will proceed anyway.")
+                    logger.debug("Session ID wait interrupted: \(error)")
                 }
 
                 if self.sessionID != nil {

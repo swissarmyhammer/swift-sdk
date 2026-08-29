@@ -1245,6 +1245,93 @@ import Testing
             }
 
             @Test(
+                "Standalone GET starts after the timeout when no session id arrives",
+                .httpClientTransportSetup,
+                .timeLimit(.minutes(1)))
+            func testStandaloneGETStartsWhenNoSessionIDArrives() async throws {
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.protocolClasses = [MockURLProtocol.self]
+
+                /// The maximum time the transport waits for a session id.
+                let sessionIDTimeoutSeconds: TimeInterval = 0.2
+                /// The HTTP status of each mock response.
+                let okStatusCode = 200
+                /// The poll interval while the test waits for a GET request.
+                let pollIntervalMilliseconds = 25
+                /// The longest the test waits for a GET request to arrive.
+                let maxWaitMilliseconds = 10_000
+
+                /// Counts the standalone GET requests the transport sends.
+                actor Scenario {
+                    private var getCount = 0
+
+                    func recordGET() {
+                        getCount += 1
+                    }
+
+                    func observedGETCount() -> Int {
+                        getCount
+                    }
+                }
+
+                let scenario = Scenario()
+
+                let transport = HTTPClientTransport(
+                    endpoint: testEndpoint,
+                    configuration: configuration,
+                    streaming: true,
+                    sseInitializationTimeout: sessionIDTimeoutSeconds,
+                    logger: nil
+                )
+
+                await MockURLProtocol.requestHandlerStorage.setHandler {
+                    [testEndpoint] (request: URLRequest) in
+                    switch request.httpMethod {
+                    case "POST":
+                        // The POST response carries no Mcp-Session-Id header.
+                        let response = HTTPURLResponse(
+                            url: testEndpoint, statusCode: okStatusCode, httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "text/plain"])!
+                        return (response, Data())
+                    case "GET":
+                        await scenario.recordGET()
+                        let response = HTTPURLResponse(
+                            url: testEndpoint, statusCode: okStatusCode, httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "text/event-stream"])!
+                        return (response, Data())
+                    default:
+                        throw NSError(
+                            domain: "MockURLProtocolError", code: 0,
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "Unexpected request method: \(String(describing: request.httpMethod))"
+                            ])
+                    }
+                }
+
+                try await transport.connect()
+
+                // The POST response gives no session id. The streaming task
+                // must start the standalone GET after the timeout.
+                try await transport.send(Data())
+
+                var waitedMilliseconds = 0
+                while await scenario.observedGETCount() < 1,
+                    waitedMilliseconds < maxWaitMilliseconds
+                {
+                    try await Task.sleep(for: .milliseconds(pollIntervalMilliseconds))
+                    waitedMilliseconds += pollIntervalMilliseconds
+                }
+
+                #expect(
+                    await scenario.observedGETCount() >= 1,
+                    "Expected a standalone GET after the session id timeout when no session id arrives"
+                )
+
+                await transport.disconnect()
+            }
+
+            @Test(
                 "Client with HTTP Transport complete flow", .httpClientTransportSetup,
                 .timeLimit(.minutes(1)))
             func testClientFlow() async throws {

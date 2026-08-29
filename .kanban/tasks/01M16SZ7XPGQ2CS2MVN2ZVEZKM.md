@@ -88,7 +88,23 @@ comments:
   id: 01m16vzszjb9wt69yxxr0ptzaz
   text: 'Housekeeping note: the work tree held a stray, empty, untracked file with the literal name `Sources/MCP/*.swift` (zero bytes, created 08:23 by an earlier pipeline step, most likely a shell quoting accident). I removed it so the commit step does not add it to the repository. No other file outside Tests/MCPTests/HTTPServerTransportTests.swift changed.'
   timestamp: 2026-08-29T13:40:17.522707+00:00
-position_column: doing
+- actor: claude-code
+  id: 01m16w77zvqx671s5t44vtwg1p
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit e092da2). 0 new findings. All 17 findings from the review of 2026-08-29 08:27 are checked.
+    - next: none. The task is complete and is in the done column.
+  timestamp: 2026-08-29T13:44:21.243430+00:00
+- actor: claude-code
+  id: 01m16w7v3t07mpf1j1fky84k1d
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file (Tests/MCPTests/HTTPServerTransportTests.swift); shared drainSSEStream helper, all 9 drain sites store and await their task; 17/17 findings checked
+    - test: green — swift test, 552 tests in 40 suites, 0 failures; clean rebuild shows 0 warnings
+    - commit: e092da2
+    - review: clean — 0 new findings; task moved to done
+  timestamp: 2026-08-29T13:44:40.826017+00:00
+position_column: done
 position_ordinal: '80'
 title: HTTPClientTransport keeps one lastEventID for every SSE stream
 ---
