@@ -22,8 +22,31 @@ comments:
     - evidence: 2 files — Sources/MCP/Base/Transports/HTTPClientTransport.swift, Tests/MCPTests/HTTPClientTransportTests.swift. RED: new test `testStandaloneGETStartsWhenNoSessionIDArrives` failed before the fix (0 GET requests in 10 s). GREEN: test passes in 0.226 s with `sseInitializationTimeout` = 0.2 s. Full `swift test`: 553 tests in 40 suites pass, 0 failures, 0 warnings.
     - next: ready for /review
   timestamp: 2026-08-29T13:49:57.880753+00:00
-position_column: doing
-position_ordinal: '80'
+- actor: claude-code
+  id: 01m16wny8m83775e2wt2b7zdg9
+  text: |-
+    ### commit — changed
+    - evidence: 0a82e31 fix(transport): release session ID signal on SSE init timeout
+    - next: run test step
+  timestamp: 2026-08-29T13:52:22.804388+00:00
+- actor: claude-code
+  id: 01m16wsm199ks61a0h5q0z5b96
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit 0a82e31) — 0 new findings; no prior findings open
+    - next: none — task is done
+  timestamp: 2026-08-29T13:54:23.401868+00:00
+- actor: claude-code
+  id: 01m16wt3rmjxmb5atm656ckxq9
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 2 files (HTTPClientTransport.swift, HTTPClientTransportTests.swift); timeout now releases the session id signal through releaseInitialSessionIDSignal(); RED then GREEN on testStandaloneGETStartsWhenNoSessionIDArrives
+    - test: green — swift test, 553 tests in 40 suites, 0 failures, 0 warnings on clean rebuild
+    - commit: 0a82e31
+    - review: clean — 0 new findings; task moved to done
+  timestamp: 2026-08-29T13:54:39.508960+00:00
+position_column: done
+position_ordinal: '8180'
 title: HTTPClientTransport streaming task hangs when no session id ever arrives
 ---
 ## What
