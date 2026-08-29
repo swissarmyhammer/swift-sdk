@@ -1103,6 +1103,148 @@ import Testing
             }
 
             @Test(
+                "Standalone GET carries no Last-Event-ID from a POST response stream",
+                .httpClientTransportSetup,
+                .timeLimit(.minutes(1)))
+            func testStandaloneGETDoesNotResumePOSTStreamEventID() async throws {
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.protocolClasses = [MockURLProtocol.self]
+
+                /// The event id the POST response stream carries. It must never
+                /// reach the standalone GET's `Last-Event-ID` header.
+                let postStreamEventID = "post-event-1"
+                /// The SSE `retry:` interval the POST stream sets, so the
+                /// standalone GET reconnects quickly after each empty stream.
+                let reconnectDelayMilliseconds = 50
+                /// The HTTP status of each mock response.
+                let okStatusCode = 200
+                /// The poll interval while the test waits for GET requests.
+                let pollIntervalMilliseconds = 25
+                /// The longest the test waits for two GET requests to arrive.
+                let maxWaitMilliseconds = 10_000
+
+                /// Tracks the POST requests served, and records the
+                /// `Last-Event-ID` header of each standalone GET observed after
+                /// the POST response stream was fully processed.
+                actor Scenario {
+                    private var postCount = 0
+                    private var postStreamProcessed = false
+                    private var lastEventIDsAfterPOST: [String?] = []
+
+                    func nextPOSTNumber() -> Int {
+                        postCount += 1
+                        return postCount
+                    }
+
+                    func markPOSTStreamProcessed() {
+                        postStreamProcessed = true
+                    }
+
+                    func record(lastEventID: String?) {
+                        if postStreamProcessed {
+                            lastEventIDsAfterPOST.append(lastEventID)
+                        }
+                    }
+
+                    func observedAfterPOST() -> [String?] {
+                        lastEventIDsAfterPOST
+                    }
+                }
+
+                let scenario = Scenario()
+
+                let transport = HTTPClientTransport(
+                    endpoint: testEndpoint,
+                    configuration: configuration,
+                    streaming: true,
+                    sseInitializationTimeout: 1,
+                    logger: nil
+                )
+
+                let postSSEBody = """
+                    retry: \(reconnectDelayMilliseconds)
+                    id: \(postStreamEventID)
+                    data: {"jsonrpc":"2.0","method":"notifications/test"}
+
+
+                    """
+
+                await MockURLProtocol.requestHandlerStorage.setHandler {
+                    [testEndpoint] (request: URLRequest) in
+                    switch request.httpMethod {
+                    case "POST":
+                        // The first POST only delivers the session id, so the
+                        // standalone GET loop starts. The second POST delivers
+                        // the SSE stream that carries the event id.
+                        if await scenario.nextPOSTNumber() == 1 {
+                            let response = HTTPURLResponse(
+                                url: testEndpoint, statusCode: okStatusCode,
+                                httpVersion: "HTTP/1.1",
+                                headerFields: [
+                                    "Content-Type": "text/plain",
+                                    "Mcp-Session-Id": "test-session-sse",
+                                ])!
+                            return (response, Data())
+                        }
+                        let response = HTTPURLResponse(
+                            url: testEndpoint, statusCode: okStatusCode, httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "text/event-stream"])!
+                        return (response, postSSEBody.data(using: .utf8)!)
+                    case "GET":
+                        await scenario.record(
+                            lastEventID: request.value(forHTTPHeaderField: "Last-Event-ID"))
+                        let response = HTTPURLResponse(
+                            url: testEndpoint, statusCode: okStatusCode, httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "text/event-stream"])!
+                        return (response, Data())
+                    default:
+                        throw NSError(
+                            domain: "MockURLProtocolError", code: 0,
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "Unexpected request method: \(String(describing: request.httpMethod))"
+                            ])
+                    }
+                }
+
+                try await transport.connect()
+
+                // The first send establishes the session id, which starts the
+                // standalone GET loop.
+                try await transport.send(Data())
+
+                // The second send returns only after the whole POST response
+                // stream is processed, so the transport has read that stream's
+                // event id before this call returns.
+                try await transport.send(Data())
+                await scenario.markPOSTStreamProcessed()
+
+                // Wait for two GET requests observed after the POST stream was
+                // processed. The second is always BUILT after the first was
+                // recorded, so at least one observed request was built after
+                // the transport read the POST stream's event id.
+                var waitedMilliseconds = 0
+                while await scenario.observedAfterPOST().count < 2,
+                    waitedMilliseconds < maxWaitMilliseconds
+                {
+                    try await Task.sleep(for: .milliseconds(pollIntervalMilliseconds))
+                    waitedMilliseconds += pollIntervalMilliseconds
+                }
+
+                let observed = await scenario.observedAfterPOST()
+                #expect(
+                    observed.count >= 2,
+                    "Expected at least two standalone GETs after the POST stream was processed")
+                for lastEventID in observed {
+                    #expect(
+                        lastEventID == nil,
+                        "Standalone GET must not carry a POST response stream's event id")
+                }
+
+                await transport.disconnect()
+            }
+
+            @Test(
                 "Client with HTTP Transport complete flow", .httpClientTransportSetup,
                 .timeLimit(.minutes(1)))
             func testClientFlow() async throws {

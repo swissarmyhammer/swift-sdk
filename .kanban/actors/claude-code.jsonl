@@ -1,0 +1,1 @@
+{"id":"01M16T5KV890CSW2KDPY4Y7F07","timestamp":"2026-08-29T13:08:30.696217Z","op":"create","item_id":"claude-code","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 6b46c1\n+name: claude-code\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 6b46c1\n-name: claude-code\n","transaction_id":null}

@@ -86,8 +86,19 @@ public actor HTTPClientTransport: Transport {
     private var initialSessionIDSignalTask: Task<Void, Never>?
     private var initialSessionIDContinuation: CheckedContinuation<Void, Never>?
 
-    /// The last event ID received from the server for SSE stream resumability
-    private var lastEventID: String?
+    /// Identifies which SSE stream `processSSE(_:from:)` reads, so each
+    /// stream's last event ID is stored in its own slot.
+    private enum SSEStreamKind {
+        /// The SSE body of a POST response.
+        case postResponse
+        /// The standalone GET SSE stream.
+        case standaloneGET
+    }
+
+    /// The last event ID received on each SSE stream kind, kept per stream so
+    /// a POST response stream's id never reaches the standalone GET's
+    /// `Last-Event-ID` header.
+    private var lastEventIDs: [SSEStreamKind: String] = [:]
 
     /// The retry interval (in milliseconds) from the server's SSE `retry:` field
     private var retryInterval: Int = 3000  // Default 3000ms per SSE spec
@@ -358,7 +369,7 @@ public actor HTTPClientTransport: Transport {
 
             if contentType.contains(ContentType.sse) {
                 logger.trace("Received SSE response, processing in streaming task")
-                let hadData = try await self.processSSE(stream)
+                let hadData = try await self.processSSE(stream, from: .postResponse)
 
                 if !hadData {
                     logger.debug("POST SSE stream closed without data, triggering GET reconnection")
@@ -599,7 +610,7 @@ public actor HTTPClientTransport: Transport {
                 request.addValue(sessionID, forHTTPHeaderField: HTTPHeaderName.sessionID)
             }
 
-            if let lastEventID = lastEventID {
+            if let lastEventID = lastEventIDs[.standaloneGET] {
                 request.addValue(lastEventID, forHTTPHeaderField: HTTPHeaderName.lastEventID)
                 logger.info("→ Resuming SSE stream with Last-Event-ID", metadata: ["lastEventID": "\(lastEventID)"])
             } else {
@@ -638,11 +649,13 @@ public actor HTTPClientTransport: Transport {
             }
 
             defer { self.activeGETSessionTask = nil }
-            try await self.processSSE(stream)
+            try await self.processSSE(stream, from: .standaloneGET)
         }
 
         @discardableResult
-        private func processSSE(_ stream: URLSession.AsyncBytes) async throws -> Bool {
+        private func processSSE(
+            _ stream: URLSession.AsyncBytes, from streamKind: SSEStreamKind
+        ) async throws -> Bool {
             logger.debug("📥 Starting SSE event processing")
             var eventCount = 0
             var hadDataEvent = false
@@ -664,7 +677,7 @@ public actor HTTPClientTransport: Transport {
                 )
 
                 if let eventID = event.id, !eventID.isEmpty {
-                    self.lastEventID = eventID
+                    self.lastEventIDs[streamKind] = eventID
                     logger.debug("Stored event ID for resumability", metadata: ["eventID": "\(eventID)"])
                 }
 

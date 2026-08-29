@@ -209,7 +209,11 @@ private func initializeSession(
 
     // Drain the SSE stream so the response task can complete
     if case .stream(let stream, _) = response {
-        Task { for try await _ in stream {} }
+        Task {
+            do {
+                for try await _ in stream {}
+            } catch {}
+        }
     }
 
     // Wait for the respond task
@@ -282,7 +286,11 @@ struct StatefulHTTPServerTransportTests {
 
         // Drain stream
         if case .stream(let stream, _) = response {
-            Task { for try await _ in stream {} }
+            Task {
+                do {
+                    for try await _ in stream {}
+                } catch {}
+            }
         }
         await transport.disconnect()
     }
@@ -316,7 +324,11 @@ struct StatefulHTTPServerTransportTests {
         #expect(response.headers[HTTPHeaderName.sessionID] == "custom-id-abc")
 
         if case .stream(let stream, _) = response {
-            Task { for try await _ in stream {} }
+            Task {
+                do {
+                    for try await _ in stream {}
+                } catch {}
+            }
         }
         await transport.disconnect()
     }
@@ -339,7 +351,11 @@ struct StatefulHTTPServerTransportTests {
         }
 
         if case .stream(let stream, _) = response {
-            Task { for try await _ in stream {} }
+            Task {
+                do {
+                    for try await _ in stream {}
+                } catch {}
+            }
         }
         await transport.disconnect()
     }
@@ -418,7 +434,11 @@ struct StatefulHTTPServerTransportTests {
         }
 
         if case .stream(let stream, _) = response {
-            Task { for try await _ in stream {} }
+            Task {
+                do {
+                    for try await _ in stream {}
+                } catch {}
+            }
         }
         await transport.disconnect()
     }
@@ -489,7 +509,11 @@ struct StatefulHTTPServerTransportTests {
         }
 
         if case .stream(let stream, _) = response {
-            Task { for try await _ in stream {} }
+            Task {
+                do {
+                    for try await _ in stream {}
+                } catch {}
+            }
         }
         await transport.disconnect()
     }
@@ -554,7 +578,11 @@ struct StatefulHTTPServerTransportTests {
         #expect(second.statusCode == 409)
 
         if case .stream(let stream, _) = first {
-            Task { for try await _ in stream {} }
+            Task {
+                do {
+                    for try await _ in stream {}
+                } catch {}
+            }
         }
         await transport.disconnect()
     }
@@ -839,7 +867,11 @@ struct StatefulHTTPServerTransportTests {
             #expect(getResponse.statusCode == 200)
 
             if case .stream(let stream, _) = getResponse {
-                Task { for try await _ in stream {} }
+                Task {
+                    do {
+                        for try await _ in stream {}
+                    } catch {}
+                }
             }
         }
 
@@ -1092,7 +1124,11 @@ struct ServerHandlerContextTests {
 
         // Drain the SSE stream in the background so the response routes cleanly.
         if case .stream(let stream, _) = response {
-            Task { for try await _ in stream {} }
+            Task {
+                do {
+                    for try await _ in stream {}
+                } catch {}
+            }
         }
 
         // Send the response — transport clears the context alongside the SSE map.
