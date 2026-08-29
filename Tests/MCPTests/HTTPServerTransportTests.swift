@@ -139,23 +139,20 @@ private actor ChunkCollector {
     func getChunks() -> [Data] { chunks }
 }
 
-private func drainSSEStream(
-    _ response: HTTPResponse,
-    maxChunks: Int = 10,
-    timeout: Duration = .seconds(2)
-) async -> [Data] {
-    guard case .stream(let stream, _) = response else { return [] }
-    let collector = ChunkCollector()
-    let task = Task {
-        for try await chunk in stream {
-            await collector.append(chunk)
-            if await collector.getChunks().count >= maxChunks { break }
-        }
+/// Consumes the SSE stream of a `.stream` response in the background so the
+/// transport can complete writes to it.
+///
+/// Returns the drain task, or `nil` when the response carries no stream.
+/// Await the returned task after the transport closes the stream — the
+/// response is routed, the session terminates, or the transport disconnects —
+/// so no drain task outlives its test.
+private func drainSSEStream(_ response: HTTPResponse) -> Task<Void, Never>? {
+    guard case .stream(let stream, _) = response else { return nil }
+    return Task {
+        do {
+            for try await _ in stream {}
+        } catch {}
     }
-    // Wait for stream to finish or timeout
-    try? await Task.sleep(for: timeout)
-    task.cancel()
-    return await collector.getChunks()
 }
 
 /// Initializes a stateful transport session and returns the session ID.
@@ -204,20 +201,19 @@ private func initializeSession(
 
     // Extract session ID
     guard let sid = response.headers[HTTPHeaderName.sessionID] else {
+        respondTask.cancel()
+        try? await respondTask.value
         throw MCPError.internalError("No session ID in init response")
     }
 
     // Drain the SSE stream so the response task can complete
-    if case .stream(let stream, _) = response {
-        Task {
-            do {
-                for try await _ in stream {}
-            } catch {}
-        }
-    }
+    let drainTask = drainSSEStream(response)
 
     // Wait for the respond task
     try? await respondTask.value
+
+    // The routed response closed the init stream, so the drain completes.
+    await drainTask?.value
 
     return sid
 }
@@ -285,14 +281,9 @@ struct StatefulHTTPServerTransportTests {
         }
 
         // Drain stream
-        if case .stream(let stream, _) = response {
-            Task {
-                do {
-                    for try await _ in stream {}
-                } catch {}
-            }
-        }
+        let drainTask = drainSSEStream(response)
         await transport.disconnect()
+        await drainTask?.value
     }
 
     @Test("Initialize with invalid session ID returns 500")
@@ -323,14 +314,9 @@ struct StatefulHTTPServerTransportTests {
 
         #expect(response.headers[HTTPHeaderName.sessionID] == "custom-id-abc")
 
-        if case .stream(let stream, _) = response {
-            Task {
-                do {
-                    for try await _ in stream {}
-                } catch {}
-            }
-        }
+        let drainTask = drainSSEStream(response)
         await transport.disconnect()
+        await drainTask?.value
     }
 
     @Test("Default UUIDSessionIDGenerator produces valid session ID")
@@ -350,14 +336,9 @@ struct StatefulHTTPServerTransportTests {
             #expect(sid.contains("-"))
         }
 
-        if case .stream(let stream, _) = response {
-            Task {
-                do {
-                    for try await _ in stream {}
-                } catch {}
-            }
-        }
+        let drainTask = drainSSEStream(response)
         await transport.disconnect()
+        await drainTask?.value
     }
 
     // MARK: - POST Notification
@@ -433,14 +414,9 @@ struct StatefulHTTPServerTransportTests {
             Issue.record("Expected .stream response")
         }
 
-        if case .stream(let stream, _) = response {
-            Task {
-                do {
-                    for try await _ in stream {}
-                } catch {}
-            }
-        }
+        let drainTask = drainSSEStream(response)
         await transport.disconnect()
+        await drainTask?.value
     }
 
     @Test("Response is routed to matching request SSE stream")
@@ -508,14 +484,9 @@ struct StatefulHTTPServerTransportTests {
             Issue.record("Expected .stream response for GET")
         }
 
-        if case .stream(let stream, _) = response {
-            Task {
-                do {
-                    for try await _ in stream {}
-                } catch {}
-            }
-        }
+        let drainTask = drainSSEStream(response)
         await transport.disconnect()
+        await drainTask?.value
     }
 
     @Test("Server-initiated message routed to GET stream")
@@ -577,14 +548,9 @@ struct StatefulHTTPServerTransportTests {
         let second = await transport.handleRequest(makeGETRequest(sessionID: sessionID))
         #expect(second.statusCode == 409)
 
-        if case .stream(let stream, _) = first {
-            Task {
-                do {
-                    for try await _ in stream {}
-                } catch {}
-            }
-        }
+        let drainTask = drainSSEStream(first)
         await transport.disconnect()
+        await drainTask?.value
     }
 
     // MARK: - DELETE
@@ -859,23 +825,18 @@ struct StatefulHTTPServerTransportTests {
         }
 
         // Now try to resume with GET + Last-Event-ID
+        var drainTask: Task<Void, Never>?
         if let eventID = primingEventID {
             let getResponse = await transport.handleRequest(
                 makeGETRequest(sessionID: sessionID, lastEventID: eventID)
             )
             // Should succeed (200) and replay events
             #expect(getResponse.statusCode == 200)
-
-            if case .stream(let stream, _) = getResponse {
-                Task {
-                    do {
-                        for try await _ in stream {}
-                    } catch {}
-                }
-            }
+            drainTask = drainSSEStream(getResponse)
         }
 
         await transport.disconnect()
+        await drainTask?.value
     }
 }
 
@@ -1123,16 +1084,12 @@ struct ServerHandlerContextTests {
         #expect(inFlight?.path == "/mcp")
 
         // Drain the SSE stream in the background so the response routes cleanly.
-        if case .stream(let stream, _) = response {
-            Task {
-                do {
-                    for try await _ in stream {}
-                } catch {}
-            }
-        }
+        let drainTask = drainSSEStream(response)
 
         // Send the response — transport clears the context alongside the SSE map.
+        // The routed response also closes the stream, so the drain completes.
         try await transport.send(makeResponseBody(id: "42"))
+        await drainTask?.value
         try await Task.sleep(for: .milliseconds(50))
 
         let afterResponse = await transport.httpRequestContext(for: .string("42"))
@@ -1242,7 +1199,6 @@ struct ServerHandlerContextTests {
         }
 
         try await server.start(transport: transport)
-        defer { Task { await server.stop() } }
 
         let body = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0",
@@ -1267,6 +1223,8 @@ struct ServerHandlerContextTests {
         #expect(await captured.auth == "Bearer server-integration-token")
         #expect(await captured.path == "/mcp")
         #expect(await captured.id == .string("call-1"))
+
+        await server.stop()
     }
 
     @Test("Non-HTTP transport yields nil httpContext")

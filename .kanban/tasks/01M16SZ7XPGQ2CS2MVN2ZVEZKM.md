@@ -35,6 +35,59 @@ comments:
     - evidence: 2 files — Sources/MCP/Base/Transports/HTTPClientTransport.swift, Tests/MCPTests/HTTPClientTransportTests.swift; `swift test` 552 tests in 40 suites, all pass, exit 0
     - next: /review; the latent GET-never-starts hang is filed as ^s4qv5d6
   timestamp: 2026-08-29T13:19:41.606306+00:00
+- actor: claude-code
+  id: 01m16vjec9rnm0nkx96mb9ytyr
+  text: |-
+    ### review — findings
+    - evidence: 17 findings from `review sha HEAD~1..HEAD` (commit 9aa6fd0). All findings are in Tests/MCPTests/HTTPServerTransportTests.swift at lines 212, 289, 327, 354, 437, 512, 581, 870, 1127. Two rule sets report them: `reuse/reuse` (8 items — the stream-drain pattern occurs 9 times; make one shared helper) and `swift/concurrency` (9 items — each unstructured `Task` must be stored and awaited, or replaced with structured concurrency).
+    - next: correct the findings in the new dated `## Review Findings` checklist, then run `/review 01M16SZ7XPGQ2CS2MVN2ZVEZKM` again. The task stays in `review`.
+  timestamp: 2026-08-29T13:32:59.657078+00:00
+- actor: claude-code
+  id: 01m16vk8626tamvr0zpttw5xvk
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 2 files (HTTPClientTransport.swift, HTTPClientTransportTests.swift); per-stream lastEventIDs with SSEStreamKind
+    - test: green — swift test, 552 tests in 40 suites, 0 failures, 0 warnings on clean rebuild
+    - commit: 9aa6fd0
+    - review: findings — 17 open, all in Tests/MCPTests/HTTPServerTransportTests.swift (:212, :289, :327, :354, :437, :512, :581, :870, :1127); reuse of the stream-drain Task pattern, and unstructured Task values that are not stored and not awaited
+  timestamp: 2026-08-29T13:33:26.082533+00:00
+- actor: claude-code
+  id: 01m16vs77bnad3zgpznkdm4vrz
+  text: |-
+    Research for the 17 findings in Tests/MCPTests/HTTPServerTransportTests.swift:
+
+    - The drain pattern occurs at 9 sites. All drain an `AsyncThrowingStream<Data, Swift.Error>` from `HTTPResponse.stream`.
+    - StatefulHTTPServerTransport closes a POST stream when its response routes (routeMessage: `continuation.finish()`), and closes ALL streams (request, standalone GET, incoming) in `disconnect()`/terminate. Thus an `await` on a drain task placed after `disconnect()` — or after the response is sent, for the two sites where the response closes the stream (initializeSession, testStatefulContextLifecycle) — cannot hang.
+    - The file already holds a PRIVATE `drainSSEStream(_ response:maxChunks:timeout:)` helper that NO test calls (dead code). It also stores a throwing Task, cancels it, and never awaits it. Plan: replace it with a new shared `drainSSEStream(_ response: HTTPResponse) -> Task<Void, Never>?` that spawns the drain and returns the handle; every site stores the handle and awaits it at the end of the test.
+    - Same cause elsewhere in the file, beyond the 9 listed lines: `defer { Task { await server.stop() } }` in testServerHandlerReadsHTTPContext (fire-and-forget unstructured Task) becomes a plain `await server.stop()` at the end; the throw path of `initializeSession` leaves `respondTask` running — it now cancels and awaits it before the throw.
+    - All other Task values in the file are stored and awaited already.
+  timestamp: 2026-08-29T13:36:41.707787+00:00
+- actor: claude-code
+  id: 01m16vyvkckmtxny8skp0bskfm
+  text: |-
+    Correction of the 17 review findings is complete. All work is in Tests/MCPTests/HTTPServerTransportTests.swift.
+
+    What changed:
+    - One shared helper `drainSSEStream(_ response: HTTPResponse) -> Task<Void, Never>?` now holds the drain pattern. It starts the drain task and returns the task handle.
+    - The 9 drain sites now call the helper. Each site keeps the task handle and awaits it at the end of the test function, after the transport closes the stream.
+    - Two sites await the handle after the response routes: `initializeSession` and `testStatefulContextLifecycle`. The transport closes a POST stream when its response routes. The other seven sites await the handle after `transport.disconnect()`. The transport closes all streams at disconnect. Thus no await can hang.
+    - The old `drainSSEStream(_:maxChunks:timeout:)` helper had no callers. It also held a throwing task that no code awaited. The new helper replaces it.
+    - The same cause was in two more places in the file. `testServerHandlerReadsHTTPContext` had `defer { Task { await server.stop() } }`; it now has a plain `await server.stop()` at the end. The throw path of `initializeSession` did not stop `respondTask`; it now cancels the task and awaits it before the throw.
+    - All 17 checklist items in `## Review Findings (2026-08-29 08:27)` are now `- [x]`.
+
+    Test result: `swift test` — 552 tests in 40 suites, all pass, exit 0. Build is clean, zero compiler warnings. Two "warning" lines in the test log are runtime logger output from the race-condition tests; they are not build warnings and they existed before this change.
+  timestamp: 2026-08-29T13:39:46.412211+00:00
+- actor: claude-code
+  id: 01m16vyysgx7jata5dw68rpfqa
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — Tests/MCPTests/HTTPServerTransportTests.swift; `swift test` 552 tests in 40 suites, all pass, exit 0, zero compiler warnings; all 17 findings flipped to [x]
+    - next: /review; the task stays in doing
+  timestamp: 2026-08-29T13:39:49.680004+00:00
+- actor: claude-code
+  id: 01m16vzszjb9wt69yxxr0ptzaz
+  text: 'Housekeeping note: the work tree held a stray, empty, untracked file with the literal name `Sources/MCP/*.swift` (zero bytes, created 08:23 by an earlier pipeline step, most likely a shell quoting accident). I removed it so the commit step does not add it to the repository. No other file outside Tests/MCPTests/HTTPServerTransportTests.swift changed.'
+  timestamp: 2026-08-29T13:40:17.522707+00:00
 position_column: doing
 position_ordinal: '80'
 title: HTTPClientTransport keeps one lastEventID for every SSE stream
@@ -145,3 +198,32 @@ standalone stream alone.
 
 ## Workflow
 - Use `/tdd` — write the failing test first, then the fix. #transport #bug
+
+
+## Review Findings (2026-08-29 08:27)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 4 file(s) reviewed, 22 not reviewed.
+
+> 21 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 21 file(s)
+
+> 1 file(s) not reviewed — no validator matched:
+> - `.gitignore` — no validator matches this file
+
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:212` `reuse/reuse` — Stream-draining code `Task { do { for try await _ in stream {} } catch {} }` is repeated 9 times across this test file (lines 212–216, 289–293, 327–331, 354–358, 437–441, 512–516, 581–585, 870–874, 1127–1131). Extract to a shared test helper function to eliminate duplication. Create a helper function in the test file (e.g., `drainSSEStream(_ stream: URLSession.AsyncBytes)`) and call it instead of repeating the pattern 9 times. This keeps stream cleanup logic in one place and makes tests easier to maintain.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:212` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:289` `reuse/reuse` — Stream-draining code repeated: same pattern as line 212. Should use shared test helper instead. Extract to shared helper function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:289` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:327` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:354` `reuse/reuse` — Stream-draining code repeated: same pattern as line 212. Should use shared test helper instead. Extract to shared helper function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:354` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:437` `reuse/reuse` — Stream-draining code repeated: same pattern as line 212. Should use shared test helper instead. Extract to shared helper function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:437` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:512` `reuse/reuse` — Stream-draining code repeated: same pattern as line 212. Should use shared test helper instead. Extract to shared helper function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:512` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:581` `reuse/reuse` — Stream-draining code repeated: same pattern as line 212. Should use shared test helper instead. Extract to shared helper function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:581` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:870` `reuse/reuse` — Stream-draining code repeated: same pattern as line 212. Should use shared test helper instead. Extract to shared helper function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:870` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:1127` `reuse/reuse` — Stream-draining code repeated: same pattern as line 212. Should use shared test helper instead. Extract to shared helper function.
+- [x] `Tests/MCPTests/HTTPServerTransportTests.swift:1127` `swift/concurrency` — Unstructured Task spawned without storage or awaiting. The concurrency rule requires structured concurrency or long-lived Task handles that are cancelled in teardown. Store the Task handle in a collection and await it when no longer needed, or use structured concurrency (async let or withTaskGroup). For test cleanup, collect and await all drain tasks at the end of the test function.
